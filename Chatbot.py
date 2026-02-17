@@ -1,0 +1,302 @@
+from flask import Flask, render_template_string, request, jsonify
+import os
+from groq import Groq
+
+app = Flask(__name__)
+
+# Initialize Groq client
+client = Groq(api_key=" ")
+
+# Store conversation history in memory (use database for production)
+conversations = {}
+
+HTML_TEMPLATE = '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Chatbot</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .chat-container {
+            width: 100%;
+            max-width: 800px;
+            height: 90vh;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            animation: slideUp 0.5s ease;
+        }
+
+        @keyframes slideUp { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
+
+        .chat-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .avatar {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            animation: pulse 2s infinite;
+            overflow: hidden;
+        }
+
+        @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+
+        .header-text h1 { font-size: 24px; font-weight: 600; }
+        .header-text p { font-size: 14px; opacity: 0.9; margin-top: 2px; }
+
+        .chat-messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; }
+        .chat-messages::-webkit-scrollbar { width: 8px; }
+        .chat-messages::-webkit-scrollbar-track { background: #f1f1f1; }
+        .chat-messages::-webkit-scrollbar-thumb { background: #667eea; border-radius: 4px; }
+
+        .message { display: flex; gap: 12px; animation: messageSlide 0.3s ease; }
+        @keyframes messageSlide { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .message.user { flex-direction: row-reverse; }
+
+        .message-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background-size: cover;
+            background-position: center;
+            flex-shrink: 0;
+        }
+
+        .message-content {
+            max-width: 70%;
+            padding: 15px 18px;
+            border-radius: 18px;
+            line-height: 1.5;
+            word-wrap: break-word;
+        }
+
+        .user .message-content {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .bot .message-content {
+            background: #f5f5f5;
+            color: #333;
+            border-bottom-left-radius: 4px;
+        }
+
+        .typing-indicator { display: none; align-items: center; gap: 12px; }
+        .typing-indicator.active { display: flex; }
+
+        .typing-dots { display: flex; gap: 4px; padding: 15px 18px; background: #f5f5f5; border-radius: 18px; border-bottom-left-radius: 4px; }
+        .typing-dots span {
+            width: 8px; height: 8px; border-radius: 50%; background: #999; animation: typing 1.4s infinite;
+        }
+        .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes typing { 0%,60%,100% { transform: translateY(0); } 30% { transform: translateY(-10px); } }
+
+        .chat-input { padding: 20px; background: white; border-top: 1px solid #e5e5e5; display: flex; gap: 12px; }
+        #userInput {
+            flex: 1;
+            padding: 14px 18px;
+            border: 2px solid #e5e5e5;
+            border-radius: 25px;
+            font-size: 15px;
+            outline: none;
+            transition: all 0.3s ease;
+        }
+        #userInput:focus { border-color: #667eea; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1); }
+
+        #sendBtn {
+            padding: 14px 28px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; border: none; border-radius: 25px;
+            font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.3s ease;
+        }
+        #sendBtn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4); }
+        #sendBtn:active { transform: translateY(0); }
+        #sendBtn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+
+        .welcome-message { text-align: center; padding: 40px 20px; color: #666; }
+        .welcome-message h2 { font-size: 28px; margin-bottom: 10px; color: #333; }
+        .welcome-message p { font-size: 16px; }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <div class="avatar">🤖</div>
+            <div class="header-text">
+                <h1>AI Chatbot</h1>
+                <p>Powered by Groq & Llama 3.3</p>
+            </div>
+        </div>
+
+        <div class="chat-messages" id="chatMessages">
+            <div class="welcome-message">
+                <h2>👋 Welcome!</h2>
+                <p>Start a conversation with your AI assistant</p>
+            </div>
+        </div>
+
+        <div class="typing-indicator" id="typingIndicator">
+            <div class="avatar" style="background-image: url('https://i.pravatar.cc/40?img=12'); background-size: cover;"></div>
+            <div class="typing-dots">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+
+        <div class="chat-input">
+            <input type="text" id="userInput" placeholder="Type your message..." />
+            <button id="sendBtn">Send</button>
+        </div>
+    </div>
+
+    <script>
+        const chatMessages = document.getElementById('chatMessages');
+        const userInput = document.getElementById('userInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const typingIndicator = document.getElementById('typingIndicator');
+        const sessionId = Date.now().toString();
+
+        function addMessage(content, isUser) {
+            const welcomeMsg = chatMessages.querySelector('.welcome-message');
+            if (welcomeMsg) welcomeMsg.remove();
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user' : 'bot'}`;
+
+            const avatar = document.createElement('div');
+            avatar.className = 'message-avatar';
+            avatar.style.backgroundImage = isUser
+                ? 'url("https://i.pravatar.cc/40?img=5")'
+                : 'url("https://i.pravatar.cc/40?img=12")';
+
+            const messageContent = document.createElement('div');
+            messageContent.className = 'message-content';
+            messageContent.textContent = content;
+
+            messageDiv.appendChild(avatar);
+            messageDiv.appendChild(messageContent);
+            chatMessages.appendChild(messageDiv);
+
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        async function sendMessage() {
+            const userMessage = userInput.value.trim();
+            if (!userMessage) return;
+
+            addMessage(userMessage, true);
+            userInput.value = '';
+
+            sendBtn.disabled = true;
+            typingIndicator.classList.add('active');
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        message: userMessage,
+                        session_id: sessionId
+                    })
+                });
+
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                typingIndicator.classList.remove('active');
+                addMessage(data.reply, false);
+
+            } catch (error) {
+                typingIndicator.classList.remove('active');
+                addMessage('Sorry, there was an error processing your request.', false);
+                console.error('Error:', error);
+            }
+
+            sendBtn.disabled = false;
+            userInput.focus();
+        }
+
+        sendBtn.addEventListener('click', sendMessage);
+        userInput.addEventListener('keypress', e => { if (e.key === 'Enter') sendMessage(); });
+
+        userInput.focus();
+    </script>
+</body>
+</html>
+'''
+
+@app.route('/')
+def index():
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    try:
+        data = request.json
+        user_message = data.get('message', '')
+        session_id = data.get('session_id', 'default')
+        
+        if not user_message:
+            return jsonify({'error': 'No message provided'}), 400
+        
+        # Initialize conversation history for new sessions
+        if session_id not in conversations:
+            conversations[session_id] = [
+                {"role": "system", "content": "You are a friendly, intelligent AI assistant like ChatGPT."}
+            ]
+        
+        # Add user message to history
+        conversations[session_id].append({"role": "user", "content": user_message})
+        
+        # Get response from Groq
+        chat_completion = client.chat.completions.create(
+            messages=conversations[session_id],
+            model="llama-3.3-70b-versatile",
+            max_tokens=1000
+        )
+        
+        reply = chat_completion.choices[0].message.content
+        
+        # Add assistant response to history
+        conversations[session_id].append({"role": "assistant", "content": reply})
+        
+        return jsonify({'reply': reply})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)
