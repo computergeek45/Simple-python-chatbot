@@ -6,3 +6,4 @@ The project demonstrates early understanding of chatbot architecture, API integr
 #to run:
  python Chatbot.py
  
+Tech Stack: Python, Flask, HTML, CSS, JavaScript, Groq API
